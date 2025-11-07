@@ -4,20 +4,16 @@ on:
   workflow_dispatch: {}
   push:
     tags:
-      - 'v*'     # push tag like v1.2.3 会触发（可按需删除/修改）
+      - 'v*'  # push tag like v1.2.3 会触发（可按需修改）
 
 env:
-  # 可按需改名（可替换为仓库中真正的二进制名）
   BINARY_NAME: vaultwarden
-  # Android 构建的输出目录
   OUT_DIR: release-artifacts
 
 jobs:
   build-windows:
     name: Build Windows x86_64
     runs-on: windows-latest
-    permissions:
-      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,7 +25,7 @@ jobs:
           profile: minimal
           override: true
 
-      - name: Cache cargo registry & artifacts
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -38,19 +34,14 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install MSVC build prerequisites
-        # windows-latest 已自带 Visual Studio/MSVC 工具链
-        run: |
-          echo "MSVC toolchain should be available on windows-latest."
-
-      - name: Build (release, x86_64-pc-windows-msvc)
+      - name: Build Windows release
         run: |
           cargo build --release --bin ${{ env.BINARY_NAME }} --target x86_64-pc-windows-msvc
 
-      - name: Prepare output dir
+      - name: Prepare Windows artifact
         run: |
           mkdir %OUT_DIR%
-          copy target\x86_64-pc-windows-msvc\release\${{ env.BINARY_NAME }}.exe %OUT_DIR%\${{ env.BINARY_NAME }}.exe || exit 0
+          copy target\x86_64-pc-windows-msvc\release\${{ env.BINARY_NAME }}.exe %OUT_DIR%\${{ env.BINARY_NAME }}.exe
           powershell -Command "Compress-Archive -Path '${{ env.OUT_DIR }}\\*' -DestinationPath '${{ env.BINARY_NAME }}-windows-x64.zip'"
 
       - name: Upload Windows artifact
@@ -64,9 +55,6 @@ jobs:
   build-android:
     name: Build Android (arm64 + armv7)
     runs-on: ubuntu-latest
-    needs: []
-    permissions:
-      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -78,7 +66,7 @@ jobs:
           profile: minimal
           override: true
 
-      - name: Cache cargo registry & artifacts
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -88,14 +76,12 @@ jobs:
           key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install cargo-ndk
-        run: |
-          cargo install cargo-ndk --locked
+        run: cargo install cargo-ndk --locked
 
-      - name: Install Android NDK (via sdkmanager)
+      - name: Install Android NDK
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip wget
-          # Download a recent Android NDK (r25c or r23b etc). Adjust version if needed.
           NDK_VER=r25b
           mkdir -p $HOME/android-ndk
           wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip -O ndk.zip
@@ -104,29 +90,24 @@ jobs:
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}" >> $GITHUB_ENV
           rm ndk.zip
 
-      - name: Add Android targets
+      - name: Install Android Rust targets
         run: |
           rustup target add aarch64-linux-android armv7-linux-androideabi
 
-      - name: Build for Android targets (arm64-v8a, armeabi-v7a)
+      - name: Build Android binaries
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: |
-          # cargo-ndk will map arm64-v8a -> aarch64-linux-android, armeabi-v7a -> armv7-linux-androideabi
-          # build both targets and collect into a single directory
-          cargo ndk -t arm64-v8a -t armeabi-v7a --release --build --bin ${{ env.BINARY_NAME }}
+          cargo ndk -t arm64-v8a -t armeabi-v7a --build release --bin ${{ env.BINARY_NAME }}
 
-          # create output dir and copy binaries
           mkdir -p ${{ env.OUT_DIR }}/android/arm64-v8a
           mkdir -p ${{ env.OUT_DIR }}/android/armeabi-v7a
 
-          # cargo-ndk places artifacts under target/<target>/release/<binary>
-          cp target/aarch64-linux-android/release/${{ env.BINARY_NAME }} ${{ env.OUT_DIR }}/android/arm64-v8a/${{ env.BINARY_NAME }} || true
-          cp target/armv7-linux-androideabi/release/${{ env.BINARY_NAME }} ${{ env.OUT_DIR }}/android/armeabi-v7a/${{ env.BINARY_NAME }} || true
+          cp target/aarch64-linux-android/release/${{ env.BINARY_NAME }} ${{ env.OUT_DIR }}/android/arm64-v8a/
+          cp target/armv7-linux-androideabi/release/${{ env.BINARY_NAME }} ${{ env.OUT_DIR }}/android/armeabi-v7a/
 
-          # make zips
-          (cd ${{ env.OUT_DIR }}/android/arm64-v8a && zip -r ../../${{ env.BINARY_NAME }}-android-arm64.zip .)
-          (cd ${{ env.OUT_DIR }}/android/armeabi-v7a && zip -r ../../${{ env.BINARY_NAME }}-android-armv7.zip .)
+          (cd ${{ env.OUT_DIR }}/android/arm64-v8a && zip -r ../../vaultwarden-android-arm64.zip .)
+          (cd ${{ env.OUT_DIR }}/android/armeabi-v7a && zip -r ../../vaultwarden-android-armv7.zip .)
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
@@ -135,4 +116,3 @@ jobs:
           path: |
             ${{ env.OUT_DIR }}/*.zip
             ${{ env.OUT_DIR }}/android/**
-
